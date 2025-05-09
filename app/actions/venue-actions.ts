@@ -3,6 +3,9 @@
 import { cache } from 'react'
 import { algeriaCities } from "@/app/config/cities"
 
+// Create a server-side cache object that persists between requests
+const VENUES_CACHE = new Map();
+const VENUE_DETAILS_CACHE = new Map();
 
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY
 
@@ -22,12 +25,27 @@ interface GooglePlaceResult {
   }
 }
 
+// Preload function to prefetch all venues during build/startup
+export async function preloadAllVenues() {
+  if (VENUES_CACHE.size > 0) return; // Only load once
+  
+  console.log('Preloading all venues data...');
+  const citiesPromises = algeriaCities.map(city => fetchVenuesForCity(city));
+  await Promise.all(citiesPromises);
+  console.log('Venues preloaded successfully');
+}
+
 // Cache the fetch venues function
 export const fetchVenuesForCity = cache(async (city: string) => {
+  // Check if we have the data in our in-memory cache
+  if (VENUES_CACHE.has(city)) {
+    return VENUES_CACHE.get(city);
+  }
+  
   try {
     const response = await fetch(
       `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(city)}+wedding+venue&key=${GOOGLE_PLACES_API_KEY}&type=establishment`,
-      { next: { revalidate: 3600 } } // Cache for 1 hour
+      { next: { revalidate: 86400 } } // Cache for 24 hours (extended from 1 hour)
     )
     
     const data = await response.json()
@@ -36,7 +54,7 @@ export const fetchVenuesForCity = cache(async (city: string) => {
       throw new Error('No results found')
     }
 
-    return data.results.map((result: GooglePlaceResult) => ({
+    const venues = data.results.map((result: GooglePlaceResult) => ({
       id: result.place_id,
       name: result.name,
       location: result.formatted_address,
@@ -49,9 +67,66 @@ export const fetchVenuesForCity = cache(async (city: string) => {
       price: Math.floor(Math.random() * (3000000 - 1000000) + 1000000),
       capacity: Math.floor(Math.random() * (400 - 50) + 50)
     }))
+    
+    // Store in our in-memory cache
+    VENUES_CACHE.set(city, venues);
+    
+    return venues;
   } catch (error) {
     console.error('Error fetching venues:', error)
     return []
+  }
+})
+
+// New function to directly fetch a venue by ID (much more efficient)
+export const fetchVenueById = cache(async (venueId: string) => {
+  // Check if we have the data in our in-memory cache
+  if (VENUE_DETAILS_CACHE.has(venueId)) {
+    return VENUE_DETAILS_CACHE.get(venueId);
+  }
+  
+  // Check if the venue exists in any of our city venue caches
+  for (const venues of VENUES_CACHE.values()) {
+    const venue = venues.find((v: { id: string }) => v.id === venueId);
+    if (venue) {
+      VENUE_DETAILS_CACHE.set(venueId, venue);
+      return venue;
+    }
+  }
+  
+  try {
+    const response = await fetch(
+      `https://maps.googleapis.com/maps/api/place/details/json?place_id=${venueId}&key=${GOOGLE_PLACES_API_KEY}&fields=name,formatted_address,rating,user_ratings_total,photos,opening_hours`,
+      { next: { revalidate: 86400 } } // Cache for 24 hours
+    )
+    
+    const data = await response.json()
+    if (!data.result) {
+      throw new Error('Venue not found')
+    }
+    
+    const result = data.result
+    const venue = {
+      id: venueId,
+      name: result.name,
+      location: result.formatted_address,
+      imageUrl: result.photos?.[0] 
+        ? `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photo_reference=${result.photos[0].photo_reference}&key=${GOOGLE_PLACES_API_KEY}`
+        : '/default.jpeg',
+      rating: result.rating,
+      reviewCount: result.user_ratings_total,
+      highlights: ['Wedding Venue', result.opening_hours?.open_now ? 'Open Now' : ''],
+      price: Math.floor(Math.random() * (3000000 - 1000000) + 1000000),
+      capacity: Math.floor(Math.random() * (400 - 50) + 50)
+    }
+    
+    // Store in our in-memory cache
+    VENUE_DETAILS_CACHE.set(venueId, venue);
+    
+    return venue;
+  } catch (error) {
+    console.error('Error fetching venue by ID:', error)
+    return null
   }
 })
 
@@ -60,7 +135,7 @@ export const fetchVenueDetails = cache(async (venueId: string) => {
   try {
     const response = await fetch(
       `https://maps.googleapis.com/maps/api/place/details/json?place_id=${venueId}&key=${GOOGLE_PLACES_API_KEY}&fields=photos,reviews&reviews_no_translations=true`,
-      { next: { revalidate: 3600 } }
+      { next: { revalidate: 86400 } } // Cache for 24 hours (extended from 1 hour)
     )
     
     const data = await response.json()
@@ -78,6 +153,9 @@ export async function getFilteredVenues(searchParams: {
   budget?: string,
   page?: number
 }) {
+  // Ensure venues are preloaded
+  await preloadAllVenues();
+  
   // Use the city from searchParams if provided, otherwise use all cities
   const citiesToFetch = searchParams.city 
     ? [searchParams.city]

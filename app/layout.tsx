@@ -6,6 +6,7 @@ import { Navbar } from "@/app/components/navbar"
 import { AuthProvider } from "@/lib/auth-context"
 import { Toaster } from "@/components/ui/sonner"
 import { SITE } from "@/lib/config"
+import '@/app/lib/preload-data'
 
 const greatVibes = Great_Vibes({
   weight: '400',

@@ -14,8 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Check, MapPin, Users } from "lucide-react"
-import { fetchVenuesForCity, fetchVenueDetails } from "@/app/actions/venue-actions"
-import { algeriaCities } from "@/app/config/cities"
+import { fetchVenueById, fetchVenueDetails } from "@/app/actions/venue-actions"
 import {
   Dialog,
   DialogContent,
@@ -23,18 +22,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-
-interface Venue {
-  id: string
-  name: string
-  location: string
-  price: number
-  capacity: number
-  imageUrl: string
-  rating?: number
-  reviewCount?: number
-  highlights: string[]
-}
 
 // Add this interface for reviews
 interface Review {
@@ -49,15 +36,13 @@ interface Photo {
   photo_reference: string
 }
 
+// Enable Incremental Static Regeneration
+export const revalidate = 3600 // Revalidate every hour
+
 export default async function VenuePage({ params }: { params: { id: string } }) {
-  // Parallel data fetching
+  // Parallel data fetching with direct venue ID lookup (much more efficient)
   const [venueData, venueDetails] = await Promise.all([
-    // Search through all cities in parallel
-    Promise.all(algeriaCities.map(city => 
-      fetchVenuesForCity(city)
-    )).then((citiesResults: Venue[][]) => 
-      citiesResults.flat().find(venue => venue.id === params.id)
-    ),
+    fetchVenueById(params.id),
     fetchVenueDetails(params.id)
   ])
 
@@ -101,6 +86,7 @@ export default async function VenuePage({ params }: { params: { id: string } }) 
                   alt={`${venueData.name} ${index + 2}`}
                   fill
                   className="object-cover rounded-lg"
+                  loading="lazy"
                 />
               </div>
             ))}

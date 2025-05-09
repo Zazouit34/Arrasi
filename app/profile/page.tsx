@@ -2,15 +2,20 @@
 
 import { useAuth } from "@/lib/auth-context";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, ListTodo, Heart, Clock, Wallet, Building } from "lucide-react";
+import { useEffect, useState, Suspense, lazy } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Users, ListTodo, Heart, Wallet } from "lucide-react";
 import { DatePickerDemo } from "@/app/components/date-picker";
 import { getUserProfile, updateUserProfile, getUserFavoritePlaceIds } from "@/lib/firebase-utils";
 import { getFilteredVenues } from "@/app/actions/venue-actions";
 import type { ProfileData } from "@/lib/firebase-utils";
 import type { VenueDetails } from "@/app/types/venues";
 import GoldenLoader from "@/app/components/golden-loader";
+
+// Lazy load components that aren't immediately visible
+const ProfileVenuesList = lazy(() => import('@/app/components/profile-venues-list'));
+const ProfileBudgetSection = lazy(() => import('@/app/components/profile-budget-section'));
+const ProfileTaskSection = lazy(() => import('@/app/components/profile-task-section'));
 
 export default function ProfilePage() {
   const { user, loading } = useAuth();
@@ -61,39 +66,26 @@ export default function ProfilePage() {
     return diffDays;
   };
 
-  // Load favorite venues
+  // Combined data loading function
   useEffect(() => {
-    const loadFavorites = async () => {
-      if (!user) return;
-      try {
-        const favoriteIds = await getUserFavoritePlaceIds(user.uid);
-        const { venues: allVenues } = await getFilteredVenues({});
-        const userFavorites = allVenues.filter(venue => 
-          favoriteIds.includes(venue.id)
-        );
-        setFavoriteVenues(userFavorites);
-      } catch (error) {
-        console.error('Error loading favorites:', error);
-      }
-    };
-
-    loadFavorites();
-  }, [user]);
-
-  // Fetch profile data
-  useEffect(() => {
-    const fetchProfileData = async () => {
+    const loadAllData = async () => {
       if (!user) return;
       
       try {
-        const data = await getUserProfile(user.uid);
-        if (data) {
-          setProfileData(data);
-          setBudgetItems(data.budgetItems || []);
-          setTotalBudget(data.budget || 2500000);
+        // Load all data in parallel
+        const [profileData, favoriteIds, venues] = await Promise.all([
+          getUserProfile(user.uid),
+          getUserFavoritePlaceIds(user.uid),
+          getFilteredVenues({})
+        ]);
+        
+        if (profileData) {
+          setProfileData(profileData);
+          setBudgetItems(profileData.budgetItems || []);
+          setTotalBudget(profileData.budget || 2500000);
           
           // Calculate guest statistics
-          const guestsArray = Array.isArray(data.guests) ? data.guests : [];
+          const guestsArray = Array.isArray(profileData.guests) ? profileData.guests : [];
           const confirmed = guestsArray.filter(guest => guest.status === 'Confirmed').length;
           const expectedWithPlusOnes = confirmed + 
             guestsArray.filter(guest => guest.status === 'Confirmed' && guest.plusOne).length;
@@ -104,12 +96,18 @@ export default function ProfilePage() {
             totalExpected: expectedWithPlusOnes
           });
         }
+        
+        // Filter favorite venues
+        const userFavorites = venues.venues.filter(venue => 
+          favoriteIds.includes(venue.id)
+        );
+        setFavoriteVenues(userFavorites);
       } catch (error) {
-        console.error('Error fetching profile:', error);
+        console.error('Error loading profile data:', error);
       }
     };
 
-    fetchProfileData();
+    loadAllData();
   }, [user]);
 
   // Save profile data
@@ -198,87 +196,40 @@ export default function ProfilePage() {
             <div>
               <p className="text-sm font-medium text-muted-foreground">Saved Venues</p>
               <h3 className="text-2xl font-bold">{favoriteVenues.length}</h3>
+              <span className="text-sm text-muted-foreground">Saved for consideration</span>
             </div>
             <Heart className="h-8 w-8 text-primary" />
           </CardContent>
         </Card>
       </div>
 
-      {/* Activity Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Upcoming Tasks */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Clock className="h-5 w-5 text-primary" />
-              Upcoming Tasks
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {profileData.tasks
-                .filter(task => !task.completed)
-                .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-                .slice(0, 3)
-                .map(task => (
-                  <div key={task.id} className="flex items-start gap-2">
-                    <div className="h-2 w-2 mt-2 rounded-full bg-primary" />
-                    <div>
-                      <p className="font-medium">{task.title}</p>
-                      <p className="text-sm text-muted-foreground">
-                        Due {new Date(task.dueDate).toLocaleDateString()}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-            </div>
-          </CardContent>
-        </Card>
+      {/* Secondary Content - Lazy Loaded */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <Suspense fallback={<div className="col-span-2"><GoldenLoader /></div>}>
+          {/* Budget Information */}
+          <div className="lg:col-span-2">
+            <ProfileBudgetSection 
+              budgetItems={budgetItems}
+              totalBudget={totalBudget}
+            />
+          </div>
+        </Suspense>
 
-        {/* Budget Overview */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Wallet className="h-5 w-5 text-primary" />
-              Budget Overview
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {budgetItems.slice(0, 3).map((item, index) => (
-                <div key={index} className="flex items-center justify-between">
-                  <span className="font-medium">{item.category}</span>
-                  <span className="text-muted-foreground">
-                    {item.amount.toLocaleString()} DZ
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Recent Venues */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Building className="h-5 w-5 text-primary" />
-              Recently Saved Venues
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {favoriteVenues.slice(0, 3).map(venue => (
-                <div key={venue.id} className="flex items-center justify-between">
-                  <span className="font-medium">{venue.name}</span>
-                  <span className="text-sm text-muted-foreground">
-                    {new Date().toLocaleDateString('en-GB')}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+        <Suspense fallback={<div><GoldenLoader /></div>}>
+          {/* Countdown Card */}
+          <div>
+            <ProfileTaskSection 
+              tasks={profileData.tasks}
+              pendingTasks={pendingTasks}
+            />
+          </div>
+        </Suspense>
       </div>
+
+      {/* Favorite Venues */}
+      <Suspense fallback={<GoldenLoader />}>
+        <ProfileVenuesList venues={favoriteVenues} />
+      </Suspense>
     </div>
   );
 } 
